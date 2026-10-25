@@ -228,7 +228,7 @@ function renderResultadosBusqueda(){
   return `<div style="position:absolute; z-index:50; background:var(--surface2); border:1px solid var(--border); border-radius:8px; margin-top:4px; overflow:hidden; box-shadow:0 6px 20px rgba(0,0,0,.4);">${items}</div>`;
 }
 
-function randomCode(){ return String(Math.floor(1000 + Math.random()*9000)); }
+function randomCode(){ return String(Math.floor(10000000 + Math.random()*90000000)); }
 function codigoUnico(){
   let c;
   const usados = (state ? state.empleados.map(e=>e.codigo) : []);
@@ -286,6 +286,12 @@ function normalizarEstado(){
     if(!e.salasConocidas) e.salasConocidas = e.salaId ? [e.salaId] : [];
     if(e.habilidades===undefined) e.habilidades = '';
     if(e.email===undefined) e.email = '';
+    if(e.fechaNacimiento===undefined) e.fechaNacimiento = '';
+    if(e.dni===undefined) e.dni = '';
+    if(e.nss===undefined) e.nss = '';
+    if(e.telefono===undefined) e.telefono = '';
+    if(e.tipoContrato===undefined) e.tipoContrato = 'fijo';
+    if(e.categoria===undefined) e.categoria = '';
     if(!e.diasPorAnio) e.diasPorAnio = {};
   });
   // Migración: versión antigua tenía un único "sustituto" fijo (ej. Raúl). Lo convertimos en empleado flotante.
@@ -676,7 +682,8 @@ function agregarEmpleado(nombre, salaId){
   const turnoId = state.plantillasTurno[posicion % state.plantillasTurno.length].id;
   const emp = { id, nombre: nombre||'Nuevo empleado', fechaIngreso: todayStr(), salaId: salaId||null,
     codigo: codigoUnico(), preferencias: [], bonusManual:{puntos:0,motivo:''},
-    salasConocidas: salaId ? [salaId] : [], habilidades:'', turnoId, diasPorAnio: {} };
+    salasConocidas: salaId ? [salaId] : [], habilidades:'', turnoId, diasPorAnio: {},
+    fechaNacimiento:'', dni:'', nss:'', email:'', telefono:'', tipoContrato:'fijo', categoria:'' };
   state.empleados.push(emp);
   if(salaId) salaById(salaId).miembros.push(id);
   return emp;
@@ -709,7 +716,20 @@ const NOMBRES_REALES_POR_SALA = {
   5:[{n:'VIKI',t:'p1'},{n:'CESAR',t:'p2'},{n:'BRIAN',t:'p3'}],
   6:[{n:'CRISTIAN',t:'p3'},{n:'Jesús (Sala 6)',t:'p2'},{n:'Vice',t:'p1'}]
 };
+const EMAILS_REALES = {"ANTONIO": "antonio@colombia.com", "NURIA": "nuria@colombia.com", "MANOLO": "manolo@colombia.com", "SALVA": "salva@colombia.com", "AHMED": "ahmed@colombia.com", "Jesús (Sala 2)": "jesus.s2@colombia.com", "ARTURO": "arturo@colombia.com", "ALEJANDRA": "alejandra@colombia.com", "Jesús (Sala 3)": "jesus.s3@colombia.com", "ISAC": "isac@colombia.com", "ALVARO": "alvaro@colombia.com", "ROGELIO": "rogelio@colombia.com", "BRIAN": "brian@colombia.com", "CESAR": "cesar@colombia.com", "VIKI": "viki@colombia.com", "CRISTIAN": "cristian@colombia.com", "Jesús (Sala 6)": "jesus.s6@colombia.com", "Vice": "vice@colombia.com"};
+function cargarEmailsReales(){
+  state.empleados.forEach(emp=>{
+    const email = EMAILS_REALES[emp.nombre];
+    if(email && !emp.email) emp.email = email;
+  });
+  // Also pre-populate admin email for salonjogema
+  if(!state.administradores.some(a=>a.email==='salonjogema@gmail.com')){
+    state.administradores.push({ id:'admin1', nombre:'Administración', email:'salonjogema@gmail.com' });
+  }
+}
+// Raúl (sustituto): raul@colombia.com — añadir su email manualmente en Equipos → Sustitutos
 function cargarNombresReales(){
+  cargarEmailsReales();
   state.salas.forEach(sala=>{
     const num = Number(sala.id.replace('s',''));
     const datos = NOMBRES_REALES_POR_SALA[num];
@@ -862,7 +882,7 @@ function renderLogin(){
         <p class="sub">Elige cómo quieres entrar</p>
         <div class="role-choice">
           <button class="role-btn" id="pick-admin"><b>Administración</b>Ver todo, asignar vacaciones y bajas, gestionar equipos</button>
-          <button class="role-btn" id="pick-empleado"><b>Soy empleado</b>Meter mis 6 periodos preferidos de vacaciones</button>
+          <button class="role-btn" id="pick-empleado"><b>Soy empleado</b>Entra con tu código de 8 dígitos</button>
         </div>
         <div id="login-sub">${loginModo==='admin' ? renderLoginSubAdmin() : loginModo==='empleado' ? renderLoginSubEmpleado() : ''}</div>
         ${loginError ? `<div class="warn-box">${loginError}</div>` : ''}
@@ -879,8 +899,7 @@ function renderLoginSubAdmin(){
 }
 function renderLoginSubEmpleado(){
   return `
-    <div class="field" style="margin-top:14px;"><label>Email</label><input type="email" id="inp-emp-email" placeholder="tu@email.com"></div>
-    <div class="field" style="margin-top:10px;"><label>Contraseña</label><input type="password" id="inp-emp-pass"></div>
+    <div class="field" style="margin-top:14px;"><label>Tu código de acceso (8 dígitos)</label><input id="inp-codigo" placeholder="Ej. 47382910" maxlength="8" style="letter-spacing:3px; font-size:20px; text-align:center;"></div>
     <button class="primary" id="btn-entrar" style="margin-top:10px; width:100%;">Entrar</button>
   `;
 }
@@ -912,23 +931,15 @@ function attachLoginHandlers(){
     document.getElementById('inp-admin-email').focus();
   }
   if(loginModo==='empleado'){
-    const entrarEmpleado = async ()=>{
-      const email = document.getElementById('inp-emp-email').value.trim();
-      const pass  = document.getElementById('inp-emp-pass').value;
-      if(!email){ loginError='Escribe tu email.'; render(); return; }
-      try{
-        const cred = await fbAuth.signInWithEmailAndPassword(email, pass);
-        const emp = state.empleados.find(e=>e.email===cred.user.email);
-        if(!emp){ await fbAuth.signOut(); loginError='No te encuentro. Habla con administración.'; render(); return; }
-        session={role:'empleado', empleadoId:emp.id}; activeTab='mispreferencias'; loginError=''; loginModo=null; render();
-      }catch(e){
-        loginError = ['auth/wrong-password','auth/invalid-credential','auth/user-not-found'].includes(e.code) ? 'Email o contraseña incorrectos.' : 'Error: '+e.message;
-        render();
-      }
+    const entrarEmpleado = ()=>{
+      const val = document.getElementById('inp-codigo').value.trim();
+      const emp = state.empleados.find(e=>e.codigo===val);
+      if(emp){ session={role:'empleado', empleadoId:emp.id}; activeTab='mispreferencias'; loginError=''; loginModo=null; render(); }
+      else{ loginError='Código no reconocido. Pregunta a administración tu código.'; render(); }
     };
     document.getElementById('btn-entrar').onclick = entrarEmpleado;
-    document.getElementById('inp-emp-pass').onkeydown = e=>{ if(e.key==='Enter') entrarEmpleado(); };
-    document.getElementById('inp-emp-email').focus();
+    document.getElementById('inp-codigo').onkeydown = e=>{ if(e.key==='Enter') entrarEmpleado(); };
+    document.getElementById('inp-codigo').focus();
   }
 }
 
@@ -1869,6 +1880,18 @@ function renderEquipos(){
           <button class="ghost danger-ghost" data-eliminar-emp="${e.id}">Eliminar</button>
         </div>
         <div class="row" style="margin-top:8px;">
+      <details style="margin-top:12px;">
+        <summary style="cursor:pointer; font-size:13px; color:var(--muted);">📋 Ficha personal (clic para ver/editar)</summary>
+        <div style="margin-top:10px; display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px;">
+          <div class="field"><label>Fecha de nacimiento</label><input type="date" data-emp-field="fechaNacimiento" data-emp-id="${e.id}" value="${e.fechaNacimiento||''}" ></div>
+          <div class="field"><label>DNI</label><input data-emp-field="dni" data-emp-id="${e.id}" value="${e.dni||''}" placeholder="12345678A"></div>
+          <div class="field"><label>Nº Seguridad Social</label><input data-emp-field="nss" data-emp-id="${e.id}" value="${e.nss||''}" placeholder="XXXXXXXXXXX"></div>
+          <div class="field"><label>Email</label><input type="email" data-emp-field="email" data-emp-id="${e.id}" value="${e.email||''}" placeholder="correo@ejemplo.com"></div>
+          <div class="field"><label>Teléfono</label><input data-emp-field="telefono" data-emp-id="${e.id}" value="${e.telefono||''}" placeholder="600000000"></div>
+          <div class="field"><label>Tipo de contrato</label><select data-emp-field="tipoContrato" data-emp-id="${e.id}"><option value="fijo" ${e.tipoContrato==='fijo'?'selected':''}>Fijo</option><option value="temporal" ${e.tipoContrato==='temporal'?'selected':''}>Temporal</option><option value="parcial" ${e.tipoContrato==='parcial'?'selected':''}>Parcial</option></select></div>
+          <div class="field"><label>Categoría profesional</label><input data-emp-field="categoria" data-emp-id="${e.id}" value="${e.categoria||''}" placeholder="Ej. Oficial 1ª"></div>
+        </div>
+      </details>
           <div class="field" style="flex:1; min-width:220px;"><label>Habilidades</label><input data-emp="${e.id}" data-field="habilidades" value="${e.habilidades}" placeholder="Ej. inglés, primeros auxilios, cocina..."></div>
         </div>
         <div style="margin-top:8px;"><label class="muted small">Salas donde también sabe cubrir:</label><div style="margin-top:4px;">${conocidasChecks}</div></div>
@@ -1880,7 +1903,6 @@ function renderEquipos(){
       ${sala.miembros.length===0 ? `<p class="subtle-note" style="color:var(--danger);">⚠ Sala sin ningún empleado — sin cobertura.</p>` : sala.miembros.length!==3 ? `<p class="subtle-note" style="color:var(--danger);">⚠ Esta sala tiene ${sala.miembros.length} personas en vez de 3 — revisa la cobertura mañana/tarde.</p>` : ''}
       <div class="row" style="margin-top:10px;">
         <div class="field"><label>Nombre del nuevo</label><input id="nuevo-nombre-${sala.id}" placeholder="Nombre"></div>
-        <div class="field"><label>Email Firebase</label><input type="email" id="nuevo-email-${sala.id}" placeholder="opcional"></div>
         <button class="ghost" data-anadir-sala="${sala.id}">+ Añadir empleado a esta sala</button>
       </div>
       <div class="row" style="margin-top:8px;">
@@ -1907,6 +1929,18 @@ function renderSustitutos(){
         <button class="ghost danger-ghost" data-eliminar-emp="${e.id}">Eliminar</button>
       </div>
       <div class="row" style="margin-top:8px;">
+        <details style="margin-top:12px;">
+          <summary style="cursor:pointer; font-size:13px; color:var(--muted);">📋 Ficha personal (clic para ver/editar)</summary>
+          <div style="margin-top:10px; display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px;">
+            <div class="field"><label>Fecha de nacimiento</label><input type="date" data-emp-field="fechaNacimiento" data-emp-id="${e.id}" value="${e.fechaNacimiento||''}" ></div>
+            <div class="field"><label>DNI</label><input data-emp-field="dni" data-emp-id="${e.id}" value="${e.dni||''}" placeholder="12345678A"></div>
+            <div class="field"><label>Nº Seguridad Social</label><input data-emp-field="nss" data-emp-id="${e.id}" value="${e.nss||''}" placeholder="XXXXXXXXXXX"></div>
+            <div class="field"><label>Email</label><input type="email" data-emp-field="email" data-emp-id="${e.id}" value="${e.email||''}" placeholder="correo@ejemplo.com"></div>
+            <div class="field"><label>Teléfono</label><input data-emp-field="telefono" data-emp-id="${e.id}" value="${e.telefono||''}" placeholder="600000000"></div>
+            <div class="field"><label>Tipo de contrato</label><select data-emp-field="tipoContrato" data-emp-id="${e.id}"><option value="fijo" ${e.tipoContrato==='fijo'?'selected':''}>Fijo</option><option value="temporal" ${e.tipoContrato==='temporal'?'selected':''}>Temporal</option><option value="parcial" ${e.tipoContrato==='parcial'?'selected':''}>Parcial</option></select></div>
+            <div class="field"><label>Categoría profesional</label><input data-emp-field="categoria" data-emp-id="${e.id}" value="${e.categoria||''}" placeholder="Ej. Oficial 1ª"></div>
+          </div>
+        </details>
         <div class="field" style="flex:1; min-width:220px;"><label>Habilidades</label><input data-emp="${e.id}" data-field="habilidades" value="${e.habilidades}" placeholder="Ej. inglés, primeros auxilios..."></div>
       </div>
       <div style="margin-top:8px;"><label class="muted small">Salas que conoce y puede cubrir:</label><div style="margin-top:4px;">${checks}</div></div>
@@ -1973,7 +2007,7 @@ function renderAjustes(){
     </div>
     <div class="card">
       <h2>Administradores</h2>
-      <p class="subtle-note">Crea primero al usuario en Firebase Console → Authentication → Añadir usuario. Ponle el email y contraseña allí, luego añade ese mismo email aquí.</p>
+      <p class="subtle-note">Crea primero al usuario en Firebase Console → Authentication → Añadir usuario. Ponle el email y contraseña allí, luego añade ese mismo email aquí. Tu email de administrador: salonjogema@gmail.com</p>
       <table style="margin-top:10px;"><thead><tr><th>Nombre</th><th>Email Firebase</th><th></th></tr></thead><tbody>
         ${state.administradores.map(a=>`<tr>
           <td><input data-admin-campo="${a.id}" data-admin-field="nombre" value="${a.nombre}"></td>
@@ -2100,6 +2134,7 @@ function attachHandlers(){
       }
       render();
     };
+
     return;
   }
 
@@ -2317,13 +2352,18 @@ function attachHandlers(){
         await saveState();
       };
     });
+    document.querySelectorAll('[data-emp-field]').forEach(inp=>{
+      inp.onchange = async ()=>{
+        const emp = empleadoById(inp.dataset.empId);
+        if(emp) emp[inp.dataset.empField] = inp.value;
+        await saveState(); showToast('Guardado');
+      };
+    });
     document.querySelectorAll('[data-anadir-sala]').forEach(btn=>{
       btn.onclick = async ()=>{
         const salaId = btn.dataset.anadirSala;
         const nombreInput = document.getElementById('nuevo-nombre-'+salaId);
-        const emailInp = document.getElementById('nuevo-email-'+salaId);
-        const emp2 = agregarEmpleado(nombreInput.value.trim(), salaId);
-        if(emailInp && emailInp.value.trim()) emp2.email = emailInp.value.trim();
+        agregarEmpleado(nombreInput.value.trim(), salaId);
         await saveState(); showToast('Empleado añadido'); render();
       };
     });
@@ -2520,7 +2560,7 @@ function attachHandlers(){
         });
       }catch(err){ showToast('No se pudo leer el archivo'); }
     };
-    document.getElementById('btn-cargar-reales').onclick = async ()=>{ cargarNombresReales(); await saveState(); showToast('Nombres reales cargados'); render(); };
+    document.getElementById('btn-cargar-reales').onclick = async ()=>{ cargarNombresReales(); cargarEmailsReales(); await saveState(); showToast('Nombres y emails cargados'); render(); };
     document.getElementById('btn-reset').onclick = ()=>{
       pedirConfirmacion('¿Seguro? Se borrarán todos los datos.', async ()=>{
         const nombreAdmin = session.adminNombre;
